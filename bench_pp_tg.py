@@ -4,38 +4,21 @@ Also tests end-to-end correctness (prefill → decode handoff).
 Scope: batch-size-1 single-stream decode, targeting local inference.
 All measurements use torch.cuda.synchronize() barriers + perf_counter.
 One warm-up run precedes each timed section."""
+import os
 import time, torch
-from model import Decoder, HIDDEN_SIZE, INTERMEDIATE_SIZE, FA_QPROJ_SIZE, FA_Q_SIZE, FA_KV_SIZE
-from model import DN_CONV_CHANNELS, DN_V_SIZE, DN_NUM_HEADS, MAX_SEQ_LEN
+from model import DEFAULT_MODEL_NAME, Decoder, allocate_prefill_buffers
 import qwen35_megakernel_bf16_C
 from transformers import AutoTokenizer
 
-tok = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-0.8B")
-dec = Decoder(verbose=True)
+MODEL_NAME = os.environ.get("QWEN_MODEL", DEFAULT_MODEL_NAME)
+
+tok = AutoTokenizer.from_pretrained(MODEL_NAME)
+dec = Decoder(model_name=MODEL_NAME, verbose=True)
 _pf = torch.ops.qwen35_megakernel_bf16_C.prefill_bf16
 
 # Allocate prefill buffers for max 512 tokens
 S_MAX = 512
-bf16 = dict(dtype=torch.bfloat16, device="cuda")
-f32 = dict(dtype=torch.float32, device="cuda")
-i32 = dict(dtype=torch.int32, device="cuda")
-mx = max(DN_CONV_CHANNELS, FA_QPROJ_SIZE, INTERMEDIATE_SIZE)
-bufs = dict(
-    hidden=torch.empty(S_MAX*HIDDEN_SIZE, **bf16),
-    residual=torch.empty(S_MAX*HIDDEN_SIZE, **bf16),
-    normalized=torch.empty(S_MAX*HIDDEN_SIZE, **bf16),
-    proj_buf=torch.empty(S_MAX*mx, **bf16),
-    proj_buf2=torch.empty(S_MAX*mx, **bf16),
-    attn_buf=torch.empty(S_MAX*max(FA_Q_SIZE, FA_KV_SIZE), **bf16),
-    mlp_buf=torch.empty(S_MAX*INTERMEDIATE_SIZE, **bf16),
-    dn_out_buf=torch.empty(S_MAX*DN_V_SIZE, **bf16),
-    beta_buf=torch.empty(S_MAX*DN_NUM_HEADS, **f32),
-    alpha_buf=torch.empty(S_MAX*DN_NUM_HEADS, **f32),
-    final_normed=torch.empty(HIDDEN_SIZE, **bf16),
-    hidden_bf16_out=torch.empty(HIDDEN_SIZE, **bf16),
-    lm_bmv=torch.empty(1024, **f32),
-    lm_bmi=torch.empty(1024, **i32),
-)
+bufs = allocate_prefill_buffers(dec.config, S_MAX)
 
 def prefill(ids):
     ids_t = torch.tensor(ids, dtype=torch.int32, device="cuda")
@@ -142,6 +125,6 @@ print(f"tg{len(gen_out)}: {tg_tps:.1f} tok/s ({tg_time*1000:.1f}ms)", flush=True
 # ============================================================
 # Summary
 # ============================================================
-print(f"\n=== Summary (RTX 4070-ti, Qwen3.5-0.8B BF16) ===", flush=True)
+print(f"\n=== Summary (RTX 4070-ti, {MODEL_NAME} BF16) ===", flush=True)
 print(f"pp{len(long_ids):>3d}: {pp_tps:>7.1f} tok/s", flush=True)
 print(f"tg{len(gen_out):>3d}: {tg_tps:>7.1f} tok/s", flush=True)

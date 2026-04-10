@@ -1,10 +1,10 @@
 /**
- * Fused single-kernel decode for Qwen3.5-0.8B (hybrid DeltaNet + Full Attention).
+ * Fused single-kernel decode for Qwen3.5 hybrid DeltaNet + Full Attention.
  * ALL BF16: weights bf16, activations bf16, accumulation f32.
  * DeltaNet state: f32 (recurrence needs precision).
  *
  * Optimized for: NVIDIA RTX 4070-ti
- * Model:         Qwen/Qwen3.5-0.8B (bf16 weights)
+ * Model:         Qwen/Qwen3.5 variant selected at build time (bf16 weights)
  */
 
 #include <cuda_bf16.h>
@@ -15,11 +15,24 @@
 // =============================================================================
 
 constexpr int WARP_SIZE = 32;
-constexpr int HIDDEN_SIZE = 1024;
-constexpr int INTERMEDIATE_SIZE = 3584;
-constexpr int NUM_LAYERS = 24;
+#ifndef QWEN_HIDDEN_SIZE
+#define QWEN_HIDDEN_SIZE 1024
+#endif
+#ifndef QWEN_INTERMEDIATE_SIZE
+#define QWEN_INTERMEDIATE_SIZE 3584
+#endif
+#ifndef QWEN_NUM_LAYERS
+#define QWEN_NUM_LAYERS 24
+#endif
+#ifndef QWEN_VOCAB_SIZE
+#define QWEN_VOCAB_SIZE 248320
+#endif
+
+constexpr int HIDDEN_SIZE = QWEN_HIDDEN_SIZE;
+constexpr int INTERMEDIATE_SIZE = QWEN_INTERMEDIATE_SIZE;
+constexpr int NUM_LAYERS = QWEN_NUM_LAYERS;
 constexpr float RMS_EPS = 1e-6f;
-constexpr int VOCAB_SIZE = 248320;
+constexpr int VOCAB_SIZE = QWEN_VOCAB_SIZE;
 
 // Full Attention
 constexpr int FA_NUM_Q_HEADS = 8;

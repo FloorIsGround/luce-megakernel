@@ -7,9 +7,19 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 
-constexpr int HIDDEN = 1024;
-constexpr int INTER = 3584;
-constexpr int VOCAB = 248320;
+#ifndef QWEN_HIDDEN_SIZE
+#define QWEN_HIDDEN_SIZE 1024
+#endif
+#ifndef QWEN_INTERMEDIATE_SIZE
+#define QWEN_INTERMEDIATE_SIZE 3584
+#endif
+#ifndef QWEN_VOCAB_SIZE
+#define QWEN_VOCAB_SIZE 248320
+#endif
+
+constexpr int HIDDEN = QWEN_HIDDEN_SIZE;
+constexpr int INTER = QWEN_INTERMEDIATE_SIZE;
+constexpr int VOCAB = QWEN_VOCAB_SIZE;
 constexpr float RMS_EPS = 1e-6f;
 
 constexpr int FA_Q_HEADS = 8;

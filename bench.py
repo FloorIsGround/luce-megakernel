@@ -1,11 +1,14 @@
 """Benchmark bf16 megakernel decode."""
+import os
 import time
 import torch
-from model import Decoder
+from model import DEFAULT_MODEL_NAME, Decoder
 from transformers import AutoTokenizer
 
-tok = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-0.8B")
-dec = Decoder(verbose=True)
+MODEL_NAME = os.environ.get("QWEN_MODEL", DEFAULT_MODEL_NAME)
+
+tok = AutoTokenizer.from_pretrained(MODEL_NAME)
+dec = Decoder(model_name=MODEL_NAME, verbose=True)
 
 prompt = "The capital of France is"
 ids = tok.encode(prompt, add_special_tokens=False)
