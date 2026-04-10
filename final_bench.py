@@ -129,7 +129,7 @@ print(f"Completion: {pt_text[:120]}")
 # Summary
 # ============================================================
 print(f"\n{'='*60}")
-print(f"FINAL RESULTS — Qwen3.5-0.8B BF16, RTX 3090")
+print(f"FINAL RESULTS — Qwen3.5-0.8B BF16, RTX 4070-ti")
 print(f"{'='*60}")
 print(f"{'Method':<25} {'pp'+str(len(prompt_ids)):>8} {'tg128':>10}")
 print(f"{'-'*45}")
