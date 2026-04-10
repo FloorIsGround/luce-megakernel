@@ -23,6 +23,12 @@ All benchmarks are **batch size 1, single-stream decode**, targeting local infer
 |---|:---:|:---:|
 | **Decode (tg128)** | **1.55x** | **3.8x** |
 
+## RTX 4070 Ti: pp302 tg128
+
+| Method | pp302 (tok/s) | tg128 (tok/s) | Correctness |
+|--------|:---:|:---:|:---:|
+| **Megakernel** | **10,800.1** | **255.1** | **PASS** |
+
 ## Apple M5 Max
 
 | Method | tok/s |

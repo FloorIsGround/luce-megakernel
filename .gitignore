@@ -1,0 +1,4 @@
+*.pyd
+/build/
+.venv
+/__pycache__

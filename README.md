@@ -47,6 +47,14 @@ So we fused everything into one kernel.
 
 3.4x faster prefill, 1.55x faster decode, 3.8x faster than PyTorch. Same hardware, same model, same weights.
 
+### RTX 4070 Ti (Qwen 3.5-0.8B)
+
+| Method | Prefill pp302 (tok/s) | Decode tg128 (tok/s) | Correctness |
+|--------|:---------------------:|:--------------------:|:-----------:|
+| **Megakernel** | **10,800.1** | **255.1** | **PASS** |
+
+Measured with `bench_pp_tg.py` on an RTX 4070 Ti. This run used a 302-token prompt (`pp302`) and passed the end-to-end prefill to decode handoff check.
+
 ### Energy Efficiency (DVFS Power Sweep)
 
 | Power Limit | Clock | Draw | tok/s | tok/J | vs Stock |
@@ -114,7 +122,7 @@ python bench_pp_tg.py    # runs pp520 tg128, prints tok/s and tok/J
 ```
 
 **Requirements:**
-- NVIDIA GPU (Ampere+), tested on RTX 3090
+- NVIDIA GPU (Ampere+), tested on RTX 3090 and RTX 4070 Ti
 - CUDA 12+
 - PyTorch 2.0+
 - ~1.5 GB VRAM for BF16 weights
