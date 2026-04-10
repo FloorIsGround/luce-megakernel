@@ -446,6 +446,19 @@ __device__ void full_attention_layer(
     grid.sync();
 
     // Phase 2: QK norm + partial RoPE + KV cache write
+
+    // Precompute RoPE cos/sin: 32 unique frequencies for this position.
+    // Warp 0 computes all 32 pairs in parallel (one per lane), then all warps read from shared.
+    // Replaces ~10 heads * 64 elements * powf/cosf/sinf → 32 calls total.
+    __shared__ float s_rope_cos[FA_ROTARY_DIM / 2];
+    __shared__ float s_rope_sin[FA_ROTARY_DIM / 2];
+    if (warp_id == 0 && lane_id < FA_ROTARY_DIM / 2) {
+        float inv_freq = float(position) / powf(FA_ROPE_THETA, float(2 * lane_id) / float(FA_ROTARY_DIM));
+        s_rope_cos[lane_id] = cosf(inv_freq);
+        s_rope_sin[lane_id] = sinf(inv_freq);
+    }
+    __syncthreads();
+
     if (block_id == 0) {
         float *k_buf = g_kv, *v_buf = g_kv + FA_KV_SIZE;
         for (int h = warp_id; h < FA_NUM_KV_HEADS; h += NUM_WARPS) {
@@ -458,9 +471,8 @@ __device__ void full_attention_layer(
             for (int i = lane_id; i < FA_HEAD_DIM; i += WARP_SIZE) {
                 float normed = kh[i] * sc * (1.0f + __bfloat162float(__ldg(w.k_norm_weight + i)));
                 if (i < FA_ROTARY_DIM) {
-                    float fe = float(2*(i%(FA_ROTARY_DIM/2))) / float(FA_ROTARY_DIM);
-                    float freq = float(position) / powf(FA_ROPE_THETA, fe);
-                    float cv = cosf(freq), sv = sinf(freq);
+                    int ridx = i % (FA_ROTARY_DIM / 2);
+                    float cv = s_rope_cos[ridx], sv = s_rope_sin[ridx];
                     int p = (i < FA_ROTARY_DIM/2) ? i+FA_ROTARY_DIM/2 : i-FA_ROTARY_DIM/2;
                     float pv = kh[p]*sc*(1.0f+__bfloat162float(__ldg(w.k_norm_weight+p)));
                     float rotated = (i < FA_ROTARY_DIM/2) ? (normed*cv - pv*sv) : (pv*sv + normed*cv);
@@ -483,9 +495,8 @@ __device__ void full_attention_layer(
                 for (int i = lane_id; i < FA_HEAD_DIM; i += WARP_SIZE) {
                     float normed = qh_ptr[i]*sc*(1.0f+__bfloat162float(__ldg(w.q_norm_weight+i)));
                     if (i < FA_ROTARY_DIM) {
-                        float fe = float(2*(i%(FA_ROTARY_DIM/2))) / float(FA_ROTARY_DIM);
-                        float freq = float(position) / powf(FA_ROPE_THETA, fe);
-                        float cv = cosf(freq), sv = sinf(freq);
+                        int ridx = i % (FA_ROTARY_DIM / 2);
+                        float cv = s_rope_cos[ridx], sv = s_rope_sin[ridx];
                         int p = (i < FA_ROTARY_DIM/2) ? i+FA_ROTARY_DIM/2 : i-FA_ROTARY_DIM/2;
                         float pv = qh_ptr[p]*sc*(1.0f+__bfloat162float(__ldg(w.q_norm_weight+p)));
                         qh_ptr[i] = (i < FA_ROTARY_DIM/2) ? (normed*cv-pv*sv) : (pv*sv+normed*cv);
@@ -754,13 +765,13 @@ __device__ void deltanet_layer(
 // LM Head: vocab projection + argmax
 // =============================================================================
 
-__global__ void lm_head_kernel(
+// Pass 1: each block computes its vocab-range partial max and writes to block_max_vals/idxs.
+// No cross-block synchronization here — stream ordering handles it.
+__global__ void lm_head_partial_kernel(
     const float *__restrict__ hidden,
     const __nv_bfloat16 *__restrict__ weight,   // [VOCAB, HIDDEN] bf16
     float *__restrict__ block_max_vals,
-    int *__restrict__ block_max_idxs,
-    int *__restrict__ output_token,
-    unsigned int *__restrict__ sync_counter)
+    int *__restrict__ block_max_idxs)
 {
     __shared__ float s_hidden[HIDDEN_SIZE];
     for (int i = threadIdx.x; i < HIDDEN_SIZE; i += LM_BLOCK_SIZE) s_hidden[i] = hidden[i];
@@ -800,18 +811,29 @@ __global__ void lm_head_kernel(
         }
         if (lane_id == 0) { block_max_vals[blockIdx.x] = mv; block_max_idxs[blockIdx.x] = mi; }
     }
-    __syncthreads();
-    if (threadIdx.x == 0) { __threadfence(); atomicAdd(sync_counter, 1); }
-    if (blockIdx.x == 0) {
-        if (threadIdx.x == 0) { volatile unsigned int *vc = (volatile unsigned int *)sync_counter; while (*vc < (unsigned int)gridDim.x) {} __threadfence(); }
-        __syncthreads();
-        int tid = threadIdx.x; float bv = -INFINITY; int bi = -1;
-        for (int i = tid; i < gridDim.x; i += LM_BLOCK_SIZE) { float v = block_max_vals[i]; if (v > bv) { bv = v; bi = block_max_idxs[i]; } }
-        __shared__ float sv[256]; __shared__ int si[256];
-        sv[tid] = bv; si[tid] = bi; __syncthreads();
-        for (int s = LM_BLOCK_SIZE/2; s > 0; s >>= 1) { if (tid < s && sv[tid+s] > sv[tid]) { sv[tid] = sv[tid+s]; si[tid] = si[tid+s]; } __syncthreads(); }
-        if (tid == 0) *output_token = si[0];
+}
+
+// Pass 2: single block reduces all partial maxes. Launched after lm_head_partial_kernel
+// on the same stream — no spinning needed, stream ordering guarantees all partials are ready.
+__global__ void lm_head_reduce_kernel(
+    const float *__restrict__ block_max_vals,
+    const int *__restrict__ block_max_idxs,
+    int *__restrict__ output_token,
+    int num_partial_blocks)
+{
+    int tid = threadIdx.x;
+    float bv = -INFINITY; int bi = -1;
+    for (int i = tid; i < num_partial_blocks; i += blockDim.x) {
+        float v = block_max_vals[i];
+        if (v > bv) { bv = v; bi = block_max_idxs[i]; }
     }
+    __shared__ float sv[LM_BLOCK_SIZE]; __shared__ int si[LM_BLOCK_SIZE];
+    sv[tid] = bv; si[tid] = bi; __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s && sv[tid+s] > sv[tid]) { sv[tid] = sv[tid+s]; si[tid] = si[tid+s]; }
+        __syncthreads();
+    }
+    if (tid == 0) *output_token = si[0];
 }
 
 // =============================================================================
@@ -949,12 +971,15 @@ extern "C" void launch_decode(
         barrier_counter, barrier_generation,
         input_token_id, position, max_seq_len);
 
-    cudaMemsetAsync(lm_sync_counter, 0, sizeof(unsigned int), stream);
-
-    lm_head_kernel<<<LM_NUM_BLOCKS, LM_BLOCK_SIZE, 0, stream>>>(
+    // Two-pass lm head: partial kernel writes per-block max, then a single tiny block reduces.
+    // Stream ordering replaces the old spinning atomic counter — no cudaMemset needed.
+    lm_head_partial_kernel<<<LM_NUM_BLOCKS, LM_BLOCK_SIZE, 0, stream>>>(
         (const float *)g_normalized,
         (const __nv_bfloat16 *)lm_head_weight,
+        block_max_vals, block_max_idxs);
+
+    lm_head_reduce_kernel<<<1, LM_BLOCK_SIZE, 0, stream>>>(
         block_max_vals, block_max_idxs,
-        output_token_id, lm_sync_counter);
+        output_token_id, LM_NUM_BLOCKS);
 }
 

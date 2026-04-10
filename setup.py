@@ -18,7 +18,7 @@ setup(
                     "-arch=sm_89",
                     "--use_fast_math",
                     "-std=c++17",
-                    "-DNUM_BLOCKS=60",
+                    "-DNUM_BLOCKS=48",
                     "-DBLOCK_SIZE=512",
                     "-DLM_NUM_BLOCKS=512",
                     "-DLM_BLOCK_SIZE=256",
