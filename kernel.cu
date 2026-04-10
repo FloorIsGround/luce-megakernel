@@ -3,7 +3,7 @@
  * ALL BF16: weights bf16, activations bf16, accumulation f32.
  * DeltaNet state: f32 (recurrence needs precision).
  *
- * Optimized for: NVIDIA RTX 3090 (sm_86, 82 SMs)
+ * Optimized for: NVIDIA RTX 4070-ti
  * Model:         Qwen/Qwen3.5-0.8B (bf16 weights)
  */
 
@@ -695,7 +695,8 @@ __device__ void deltanet_layer(
             }
             stk = warp_reduce_sum(stk); sqv = warp_reduce_sum(sqv);
             stk = __shfl_sync(0xffffffff,stk,0); sqv = __shfl_sync(0xffffffff,sqv,0);
-            float error_j = (s_v[j] - stk) * beta;
+            // Match prefill recurrence exactly so KV/state handoff is consistent.
+            float error_j = (s_v[j] - decay * stk) * beta;
             float o_j = decay * sqv + error_j * kq;
             if (lane_id == 0) out_head[j] = o_j;
 #pragma unroll

@@ -142,6 +142,6 @@ print(f"tg{len(gen_out)}: {tg_tps:.1f} tok/s ({tg_time*1000:.1f}ms)", flush=True
 # ============================================================
 # Summary
 # ============================================================
-print(f"\n=== Summary (RTX 3090, Qwen3.5-0.8B BF16) ===", flush=True)
+print(f"\n=== Summary (RTX 4070-ti, Qwen3.5-0.8B BF16) ===", flush=True)
 print(f"pp{len(long_ids):>3d}: {pp_tps:>7.1f} tok/s", flush=True)
 print(f"tg{len(gen_out):>3d}: {tg_tps:>7.1f} tok/s", flush=True)
